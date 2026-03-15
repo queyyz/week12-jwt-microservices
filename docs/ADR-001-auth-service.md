@@ -4,25 +4,31 @@
 Accepted
 
 ## Context
-ในสถาปัตยกรรมเดิม (Week 6) ระบบถูกออกแบบมาให้ Task Service (หรือ Backend หลัก) ทำหน้าที่รวมศูนย์ทุกอย่าง ทั้งการจัดการข้อมูล Task, การจัดการข้อมูล User และการทำ Authentication (Login/Register) ไว้ในที่เดียวกัน (Monolithic structure ในส่วนของ API) 
-การผูก Logic การพิสูจน์ตัวตนไว้กับ Service ที่จัดการเอกสาร/งาน ส่งผลให้เกิดความซับซ้อนของ Codebase และหากมีปริมาณคนพยายาม Login หรือ Register เข้ามาพร้อมกันจำนวนมาก อาจดึงทรัพยากรระบบไปจนทำให้ผู้ใช้ที่ต้องการดึงข้อมูล Task ธรรมดาๆ ได้รับผลกระทบ (Performance limitation) นอกจากนี้ ในแง่ของความปลอดภัย หาก Backend ตัวเดียวนี้โดนเจาะ แฮกเกอร์อาจเข้าถึงได้ทั้งโค้ดจัดการ Token และข้อมูลทั้งหมดทันที
+In the previous architecture (Week 6), the system was designed so that the Task Service (the main backend) handled multiple responsibilities in a single place. It managed Task data, User data, and also performed Authentication processes such as Login and Register. This resulted in a monolithic API structure, where several unrelated responsibilities were tightly coupled together.
+Keeping authentication logic within the same service that manages task-related operations increases the complexity of the codebase. Additionally, if a large number of users attempt to log in or register at the same time, the authentication workload may consume system resources and negatively impact users who simply want to retrieve or manage tasks.
+From a security perspective, placing all critical logic in one backend also creates higher risk. If the service is compromised, an attacker could potentially gain access to both authentication mechanisms (such as token generation) and application data simultaneously.
 
 ## Decision
-ตัดสินใจแยก Auth Service ออกเป็น Service แยกจาก Task Service และ User Service อย่างเด็ดขาด โดย Auth Service จะมีหน้าที่หลักคือ:
-- รับผิดชอบกระบวนการยืนยันตัวตน (Authentication) เท่านั้น (Login, Register)
-- เชื่อมต่อกับ User Database เพื่อนำ Email และ Password มาตรวจสอบ (Hash Compare)
-- ออกใบรับรองสิทธิ์รูปแบบ JSON Web Token (JWT) เพื่อให้ Client เก็บและนำไปใช้
-- Service อื่นๆ (เช่น Task Service) จะเปลี่ยนหน้าที่ไปกระทำเพียงแค่ "การตรวจสอบความถูกต้องของ JWT (Verify)" และบังคับใช้สิทธิ์ (Authorization) จาก Payload ที่อ่านได้ โดยไม่ต้องเข้ามาจัดการกระบวนการ Login อีกต่อไป
+The architecture will be updated by separating the Auth Service from the Task Service and User Service. The Auth Service will operate as an independent component dedicated solely to authentication responsibilities.
+
+**The Auth Service will:**
+- Handle user authentication processes, including Login and Register.
+- Communicate with the User Database to validate credentials by comparing stored password hashes.
+- Generate and issue JSON Web Tokens (JWT) for authenticated users.
+- Allow client applications to store and include these tokens in future requests.
+**Other services (such as the Task Service) will no longer manage login operations. Instead, they will only:**
+- Verify the validity of JWT tokens received in requests.
+- Authorize user access based on the information contained in the token payload.
 
 ## Consequences
 **Positive:**
-- **Separation of Concerns:** หน้าที่การทำงานแต่ละระบบถูกแบ่งแยกชัดเจน โค้ดของ Task Service จะเบาลงและโฟกัสแค่ทางด้าน Business Logic ของงานเท่านั้น
-- **Independent Scalability:** สามารถ Scale เพิ่ม/ลดทรัพยากรของ Auth Service แยกกันกับ Task Service ได้อย่างอิสระ ตามปริมาณผู้ใช้งานที่กำลัง Login โหลดหนักแค่ Auth แต่ Task ดึงข้อมูลได้ราบรื่น
+- **Clear Separation of Responsibilities:** Each service focuses on its own purpose. The Task Service becomes simpler and concentrates only on task-related business logic.
+- **Independent Scalability:** The Auth Service and Task Service can be scaled separately depending on workload. For example, heavy login traffic affects only the Auth Service without slowing down task operations.
 - **Enhanced Security:** รวมศูนย์การควบคุมเกร็ดความปลอดภัย การเข้ารหัส Token และ Secret Key ไว้ที่ Service เดียว จำกัดขอบเขตช่องโหว่ (Attack Surface) ได้ดีขึ้น
 
 **Negative:**
-- **Network & Operational Overhead:** มีความซับซ้อนทางด้าน Architecture มากขึ้น ต้องบริหารจัดการ Microservice ที่เพิ่มขึ้น, การจัดการ Container และการเซ็ตอัพ API Gateway ที่ต้อง Forward Request ให้ตรงจุด
-- **Complexity in Data Sharing:** ข้อมูล User Profile บางส่วนที่ต้องแสดงผลอาจไม่ครบถ้วนใน Auth หรือไม่ได้ถือครองไว้ ต้องออกแบบว่าจะส่งต่อ (Share) Data ระหว่าง Service อย่างไร
-
+- **Additional Network and Operational Complexity:** The architecture becomes more complex due to the introduction of extra microservices. This requires additional management of containers, service communication, and potentially an API Gateway to route requests correctly.
+- **Data Coordination Challenges:** Some user profile information required by other services might not be directly available. Mechanisms for sharing or retrieving user data between services must be designed carefully.
 **Trade-offs:**
+This design accepts a slight increase in infrastructure complexity and network communication latency in exchange for stronger security, improved system availability, and a more scalable architecture that is better suited for future growth.
 - ยอมแลกความซับซ้อนในระดับ Infrastructure (ต้องดูแล Service เพิ่ม) และ Latency เล็กน้อยในการสื่อสารผ่านเครือข่าย เพื่อแลกกับ Security ที่รัดกุมขึ้น, อัตรา Availability ของระบบโดยรวมที่ดีขึ้น (ไม่ล่มแบบ Single Point of Failure ง่ายๆ) และสถาปัตยกรรมที่พร้อมสเกลตัวได้ในอนาคต
